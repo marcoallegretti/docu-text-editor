@@ -1,0 +1,930 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_quill/flutter_quill.dart' as quill;
+import '../theme.dart';
+import '../models/document_model.dart';
+import '../services/platform_service.dart';
+import '../utils/word_counter.dart';
+
+
+import 'toolbar_widget.dart';
+
+// VoidCallbackIntent class for keyboard shortcuts
+class VoidCallbackIntent extends Intent {
+  final VoidCallback callback;
+  const VoidCallbackIntent(this.callback);
+}
+
+class DocumentView extends StatefulWidget {
+  final DocumentModel document;
+  final Function(quill.QuillController) onContentChanged;
+
+  const DocumentView({
+    Key? key,
+    required this.document,
+    required this.onContentChanged,
+  }) : super(key: key);
+
+  @override
+  State<DocumentView> createState() => _DocumentViewState();
+}
+
+class _DocumentViewState extends State<DocumentView> with SingleTickerProviderStateMixin {
+  late quill.QuillController _controller;
+  late ScrollController _scrollController;
+  int _wordCount = 0;
+  int _pageCount = 1;
+  int _currentPage = 1;
+  bool _isEditorFocused = false;
+  final FocusNode _editorFocusNode = FocusNode();
+  late AnimationController _animController;
+  late Animation<double> _toolbarAnimation;
+  late Animation<double> _paperAnimation;
+  bool _showToolbar = true;
+  
+  // Keyboard shortcut bindings
+  final Map<ShortcutActivator, VoidCallback> _shortcuts = {};
+
+
+
+  // Insert image at cursor
+  void _insertImage() {
+    debugPrint('_insertImage called');
+    // Make sure editor is focused
+    FocusScope.of(context).requestFocus(_editorFocusNode);
+    
+    try {
+      // For demo, we'll insert a placeholder image
+      // In a real app, you would show an image picker dialog
+      final imageUrl = 'https://place-hold.it/300x200';
+      
+      // First insert a new line to ensure the image is on its own line
+      final index = _controller.selection.baseOffset;
+      debugPrint('Current selection index: $index');
+      _controller.replaceText(index, 0, '\n', null);
+      
+      // Insert the image embed
+      debugPrint('Inserting image at index: ${index + 1}');
+      _controller.replaceText(
+        index + 1, // After the newline
+        0,
+        quill.BlockEmbed.image(imageUrl),
+        null,
+      );
+      
+      // Add another newline after the image
+      _controller.replaceText(index + 2, 0, '\n', null);
+      
+      // Provide user feedback
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Image inserted')),
+      );
+      debugPrint('Image insertion completed successfully');
+    } catch (e) {
+      debugPrint('Error inserting image: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error inserting image: ${e.toString()}')),
+      );
+    }
+  }
+
+  // Insert table at cursor
+  void _insertTable() {
+    // Make sure editor is focused
+    FocusScope.of(context).requestFocus(_editorFocusNode);
+    
+    // Create a 2x2 table
+    // For flutter_quill, tables are typically embedded as custom blocks
+    try {
+      // First insert a new line to ensure the table is on its own line
+      final index = _controller.selection.baseOffset;
+      _controller.replaceText(index, 0, '\n', null);
+      
+      // Insert a simple 2x2 table embedded block
+      final tableJson = {
+        'rows': 2,
+        'columns': 2,
+        'colWidths': [250, 250],
+      };
+      
+      _controller.replaceText(
+        index + 1,  // After the newline
+        0,
+        quill.BlockEmbed('table', json.encode(tableJson)),
+        null,
+      );
+      
+      // Add another newline after the table
+      _controller.replaceText(index + 2, 0, '\n', null);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Table inserted')),
+      );
+    } catch (e) {
+      debugPrint('Error inserting table: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error inserting table: ${e.toString()}')),
+      );
+    }
+  }
+
+  // Insert divider at cursor
+  void _insertDivider() {
+    // Make sure editor is focused
+    FocusScope.of(context).requestFocus(_editorFocusNode);
+    
+    try {
+      // First insert a new line to ensure the divider is on its own line
+      final index = _controller.selection.baseOffset;
+      _controller.replaceText(index, 0, '\n', null);
+      
+      // Insert the divider (horizontal rule)
+      _controller.replaceText(
+        index + 1, // After the newline
+        0,
+        quill.BlockEmbed('divider', 'true'),
+        null,
+      );
+      
+      // Add another newline after the divider
+      _controller.replaceText(index + 2, 0, '\n', null);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Divider inserted')),
+      );
+    } catch (e) {
+      debugPrint('Error inserting divider: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error inserting divider: ${e.toString()}')),
+      );
+    }
+  }
+
+  // Insert blockquote at cursor
+  void _insertBlockquote() {
+    // Make sure editor is focused
+    FocusScope.of(context).requestFocus(_editorFocusNode);
+    
+    try {
+      final index = _controller.selection.baseOffset;
+      
+      // Insert text for the blockquote if there's no selection
+      if (_controller.selection.baseOffset == _controller.selection.extentOffset) {
+        _controller.replaceText(index, 0, 'Type your quote here', null);
+      }
+      
+      // Apply blockquote formatting
+      _controller.formatText(
+        index,
+        _controller.selection.extentOffset - index > 0 ? 
+            _controller.selection.extentOffset - index : 
+            'Type your quote here'.length,
+        quill.Attribute.blockQuote,
+      );
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Blockquote inserted')),
+      );
+    } catch (e) {
+      debugPrint('Error inserting blockquote: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error inserting blockquote: ${e.toString()}')),
+      );
+    }
+  }
+
+  // Insert code block at cursor
+  void _insertCodeBlock() {
+    // Make sure editor is focused
+    FocusScope.of(context).requestFocus(_editorFocusNode);
+    
+    try {
+      final index = _controller.selection.baseOffset;
+      
+      // Insert sample code if there's no selection
+      if (_controller.selection.baseOffset == _controller.selection.extentOffset) {
+        _controller.replaceText(index, 0, 'print("Hello, world!");', null);
+      }
+      
+      // Apply code block formatting
+      _controller.formatText(
+        index,
+        _controller.selection.extentOffset - index > 0 ? 
+            _controller.selection.extentOffset - index : 
+            'print("Hello, world!");'.length,
+        quill.Attribute.codeBlock,
+      );
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Code block inserted')),
+      );
+    } catch (e) {
+      debugPrint('Error inserting code block: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error inserting code block: ${e.toString()}')),
+      );
+    }
+  }
+
+  // Show page settings dialog
+  void _showPageSettings() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.settings, color: AppTheme.primaryColor),
+            SizedBox(width: 8),
+            Text('Page Settings'),
+          ],
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Add your page settings controls here
+            Text('Page size, margins, orientation, etc.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Export document to various formats
+  void _exportDocument() {
+    showDialog(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.file_download, color: AppTheme.primaryColor),
+            SizedBox(width: 8),
+            Text('Export Document'),
+          ],
+        ),
+        children: [
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Document exported as PDF')),
+              );
+            },
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8.0),
+              child: Text('Export as PDF'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Document exported as HTML')),
+              );
+            },
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8.0),
+              child: Text('Export as HTML'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Document exported as Plain Text')),
+              );
+            },
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8.0),
+              child: Text('Export as Plain Text'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper function to check if tap is inside text content
+  bool _isPositionOnText(Offset position) {
+    // Consider any selection as being on text
+    if (_controller.selection.baseOffset != _controller.selection.extentOffset) {
+      return true;
+    }
+    
+    // For simplicity, we'll use a heuristic - if the position is close to text content
+    // This is a simplification and would need more precise hit testing in a real app
+    // Check if document has any content at all
+    if (_controller.document.length > 0) {
+      // Basic heuristic to determine if we're likely clicking on text
+      // A real implementation would do actual hit-testing with the render objects
+      return true;
+    }
+    
+    return false;
+  }
+
+  // Show text formatting context menu
+  void _showTextContextMenu(Offset position) {
+    final RelativeRect rect = RelativeRect.fromLTRB(
+      position.dx, position.dy, position.dx + 1, position.dy + 1);
+    
+    showMenu<String>(
+      context: context,
+      position: rect,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: [
+        const PopupMenuItem<String>(
+          value: 'bold',
+          child: Row(
+            children: [
+              Icon(Icons.format_bold, size: 18),
+              SizedBox(width: 8),
+              Text('Bold'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'italic',
+          child: Row(
+            children: [
+              Icon(Icons.format_italic, size: 18),
+              SizedBox(width: 8),
+              Text('Italic'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'underline',
+          child: Row(
+            children: [
+              Icon(Icons.format_underline, size: 18),
+              SizedBox(width: 8),
+              Text('Underline'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'strikethrough',
+          child: Row(
+            children: [
+              Icon(Icons.format_strikethrough, size: 18),
+              SizedBox(width: 8),
+              Text('Strikethrough'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'cut',
+          child: Row(
+            children: [
+              Icon(Icons.content_cut, size: 18),
+              SizedBox(width: 8),
+              Text('Cut'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'copy',
+          child: Row(
+            children: [
+              Icon(Icons.content_copy, size: 18),
+              SizedBox(width: 8),
+              Text('Copy'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'paste',
+          child: Row(
+            children: [
+              Icon(Icons.content_paste, size: 18),
+              SizedBox(width: 8),
+              Text('Paste'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'selectAll',
+          child: Row(
+            children: [
+              Icon(Icons.select_all, size: 18),
+              SizedBox(width: 8),
+              Text('Select All'),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == null) return;
+      
+      // Handle the selected item
+      FocusScope.of(context).requestFocus(_editorFocusNode);
+      
+      switch (value) {
+        case 'bold':
+          _controller.formatSelection(quill.Attribute.bold);
+          break;
+        case 'italic':
+          _controller.formatSelection(quill.Attribute.italic);
+          break;
+        case 'underline':
+          _controller.formatSelection(quill.Attribute.underline);
+          break;
+        case 'strikethrough':
+          _controller.formatSelection(quill.Attribute.strikeThrough);
+          break;
+        case 'cut':
+          _cutText();
+          break;
+        case 'copy':
+          _copyText();
+          break;
+        case 'paste':
+          _pasteText();
+          break;
+        case 'selectAll':
+          _selectAllText();
+          break;
+      }
+    });
+  }
+  
+  // Show workspace context menu
+  void _showWorkspaceContextMenu(Offset position) {
+    final RelativeRect rect = RelativeRect.fromLTRB(
+      position.dx, position.dy, position.dx + 1, position.dy + 1);
+    
+    showMenu<String>(
+      context: context,
+      position: rect,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: [
+        const PopupMenuItem<String>(
+          value: 'image',
+          child: Row(
+            children: [
+              Icon(Icons.image_outlined, size: 18),
+              SizedBox(width: 8),
+              Text('Insert Image'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'table',
+          child: Row(
+            children: [
+              Icon(Icons.table_chart_outlined, size: 18),
+              SizedBox(width: 8),
+              Text('Insert Table'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'divider',
+          child: Row(
+            children: [
+              Icon(Icons.horizontal_rule, size: 18),
+              SizedBox(width: 8),
+              Text('Insert Divider'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'blockquote',
+          child: Row(
+            children: [
+              Icon(Icons.format_quote_outlined, size: 18),
+              SizedBox(width: 8),
+              Text('Insert Blockquote'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'codeblock',
+          child: Row(
+            children: [
+              Icon(Icons.code, size: 18),
+              SizedBox(width: 8),
+              Text('Insert Code Block'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'settings',
+          child: Row(
+            children: [
+              Icon(Icons.settings_outlined, size: 18),
+              SizedBox(width: 8),
+              Text('Page Settings'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'export',
+          child: Row(
+            children: [
+              Icon(Icons.file_download_outlined, size: 18),
+              SizedBox(width: 8),
+              Text('Export Document'),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == null) return;
+      
+      // Handle the selected item
+      switch (value) {
+        case 'image':
+          _insertImage();
+          break;
+        case 'table':
+          _insertTable();
+          break;
+        case 'divider':
+          _insertDivider();
+          break;
+        case 'blockquote':
+          _insertBlockquote();
+          break;
+        case 'codeblock':
+          _insertCodeBlock();
+          break;
+        case 'settings':
+          _showPageSettings();
+          break;
+        case 'export':
+          _exportDocument();
+          break;
+      }
+    });
+  }
+  
+  // Helper methods for clipboard operations
+  void _cutText() async {
+    final text = _controller.document.getPlainText(
+      _controller.selection.start,
+      _controller.selection.end,
+    );
+    await Clipboard.setData(ClipboardData(text: text));
+    _controller.replaceText(
+      _controller.selection.start,
+      _controller.selection.end - _controller.selection.start,
+      '',
+      null,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Cut to clipboard')),
+    );
+  }
+  
+  void _copyText() async {
+    final text = _controller.document.getPlainText(
+      _controller.selection.start,
+      _controller.selection.end,
+    );
+    await Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Copied to clipboard')),
+    );
+  }
+  
+  void _pasteText() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data != null && data.text != null) {
+      _controller.replaceText(
+        _controller.selection.start,
+        _controller.selection.end - _controller.selection.start,
+        data.text!,
+        null,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pasted from clipboard')),
+      );
+    }
+  }
+  
+  void _selectAllText() {
+    final documentLength = _controller.document.length;
+    _controller.updateSelection(
+      TextSelection(baseOffset: 0, extentOffset: documentLength),
+      quill.ChangeSource.local,
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = widget.document.toQuillController();
+    _scrollController = ScrollController();
+
+    // Add listeners
+    _controller.document.changes.listen(_handleDocumentChange);
+    _editorFocusNode.addListener(_handleFocusChange);
+    
+    // Initialize animations
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
+    
+    _toolbarAnimation = CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeInOut,
+    );
+    
+    _paperAnimation = CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeOutQuad,
+    );
+    
+    // Listen for document changes
+    _controller.document.changes.listen(_handleDocumentChange);
+    
+    // Initial counts
+    _updateWordCount();
+    
+    // Setup keyboard shortcuts (for desktop platforms)
+    if (PlatformService.supportsKeyboardShortcuts()) {
+      _setupKeyboardShortcuts();
+    }
+    
+    // Start with everything visible
+    _animController.value = 1.0;
+    
+    // Set up scroll listener to auto-hide toolbar on scroll
+    _scrollController.addListener(_handleScroll);
+  }
+  
+  void _handleScroll() {
+    if (!PlatformService.isDesktopPlatform()) {
+      if (_scrollController.offset > 20 && _showToolbar) {
+        setState(() {
+          _showToolbar = false;
+          _animController.reverse();
+        });
+      } else if (_scrollController.offset <= 20 && !_showToolbar) {
+        setState(() {
+          _showToolbar = true;
+          _animController.forward();
+        });
+      }
+    }
+  }
+  
+  void _setupKeyboardShortcuts() {
+    // Define common keyboard shortcuts
+    _shortcuts.addAll({
+      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyB): () {
+        _controller.formatSelection(quill.Attribute.bold);
+      },
+      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyI): () {
+        _controller.formatSelection(quill.Attribute.italic);
+      },
+      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyU): () {
+        _controller.formatSelection(quill.Attribute.underline);
+      },
+      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.digit1): () {
+        _controller.formatSelection(quill.Attribute.h1);
+      },
+      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.digit2): () {
+        _controller.formatSelection(quill.Attribute.h2);
+      },
+      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.digit3): () {
+        _controller.formatSelection(quill.Attribute.h3);
+      },
+    });
+  }
+
+  void _handleFocusChange() {
+    setState(() {
+      _isEditorFocused = _editorFocusNode.hasFocus;
+      
+      // Show toolbar when focus gained
+      if (_isEditorFocused && !_showToolbar) {
+        _showToolbar = true;
+        _animController.forward();
+      }
+    });
+  }
+
+  void _handleDocumentChange(dynamic _) {
+    // Update word count when document changes
+    _updateWordCount();
+    widget.onContentChanged(_controller);
+  }
+
+  void _updateWordCount() {
+    setState(() {
+      _wordCount = WordCounter.countWords(_controller);
+      _pageCount = WordCounter.estimatePageCount(_wordCount);
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scrollController.dispose();
+    _editorFocusNode.removeListener(_handleFocusChange);
+    _editorFocusNode.dispose();
+    _animController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final deviceType = PlatformService.getDeviceType(context);
+    final isDesktop = deviceType == DeviceType.desktop;
+    final isTablet = deviceType == DeviceType.tablet;
+  
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    
+    // Set padding based on device type
+    final documentPadding = isDesktop 
+        ? 40.0 
+        : isTablet 
+            ? 32.0 
+            : 24.0;
+    
+    // Set max width based on device type
+    final maxWidth = isDesktop 
+        ? 900.0 
+        : isTablet 
+            ? 700.0 
+            : 500.0;
+    
+    // Use shortcuts on desktop
+    Widget editorWidget = Column(
+      children: [
+        // Toolbar - bigger buttons on mobile
+        SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.0, -1.0),
+            end: Offset.zero,
+          ).animate(_toolbarAnimation),
+          child: FadeTransition(
+            opacity: _toolbarAnimation,
+            child: EditorToolbar(controller: _controller),
+          ),
+        ),
+        
+        // Document editing area
+        Expanded(
+          child: Container(
+            color: isDarkMode ? Colors.grey[900] : Colors.grey[200],
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: maxWidth, // Adjust based on device type
+                ),
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.0, 0.1),
+                    end: Offset.zero,
+                  ).animate(_paperAnimation),
+                  child: FadeTransition(
+                    opacity: _paperAnimation,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isDarkMode ? AppTheme.darkPaperColor : AppTheme.paperColor,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withAlpha(((isDarkMode ? 0.2 : 0.05) * 255).toInt()),
+                            blurRadius: 8,
+                            offset: const Offset(0, 1),
+                          ),
+                          BoxShadow(
+                            color: Colors.black.withAlpha(((isDarkMode ? 0.2 : 0.05) * 255).toInt()),
+                            blurRadius: 1,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                        borderRadius: BorderRadius.circular(isDesktop ? 3 : 0),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(isDesktop ? 3 : 0),
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: GestureDetector(
+                                onSecondaryTapDown: isDesktop ? (details) {
+                                  // Get local position for hit testing
+                                  final RenderBox box = context.findRenderObject() as RenderBox;
+                                  final localPosition = box.globalToLocal(details.globalPosition);
+                                  
+                                          // Prevent the click from reaching the editor below
+                                          child: Container(color: Colors.transparent),
+                                        ),
+                                      ),
+                                ),
+                              ),
+                            ),
+                            
+
+                            // Pagination indicator
+                            PaginationIndicator(
+                              currentPage: _currentPage,
+                              totalPages: _pageCount,
+                            ),
+                            
+                            // Simple test button for direct formatting (temporary for debugging)
+                            Positioned(
+                              right: 20,
+                              bottom: 20,
+                              child: FloatingActionButton(
+                                onPressed: () {
+                                  // Request focus and apply bold formatting directly
+                                  FocusScope.of(context).requestFocus(_editorFocusNode);
+                                  
+                                  // First ensure there's a selection
+                                  if (_controller.selection.baseOffset == _controller.selection.extentOffset) {
+                                    // No selection, select the first 5 characters if document has content
+                                    if (_controller.document.length > 0) {
+                                      final endOffset = _controller.document.length < 5 ? _controller.document.length : 5;
+                                      _controller.updateSelection(
+                                        TextSelection(baseOffset: 0, extentOffset: endOffset),
+                                        quill.ChangeSource.local,
+                                      );
+                                    }
+                                  }
+                                  
+                                  // Apply formatting
+                                  _controller.formatSelection(quill.Attribute.bold);
+                                  
+                                  // Show notification
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Test Bold applied'),
+                                      duration: Duration(milliseconds: 800),
+                                    ),
+                                  );
+                                },
+                                child: const Icon(Icons.format_bold),
+                                mini: true,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        
+        // Word count display
+        SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.0, 1.0),
+            end: Offset.zero,
+          ).animate(_toolbarAnimation),
+          child: FadeTransition(
+            opacity: _toolbarAnimation,
+            child: WordCountDisplay(
+              wordCount: _wordCount,
+              pageCount: _pageCount,
+            ),
+          ),
+        ),
+      ],
+    );
+    
+    // Wrap with keyboard shortcuts if on desktop
+    if (isDesktop && _shortcuts.isNotEmpty) {
+      return Shortcuts(
+        shortcuts: Map.fromEntries(
+          _shortcuts.entries.map((entry) => 
+            MapEntry(entry.key, VoidCallbackIntent(entry.value))
+          ),
+        ),
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            VoidCallbackIntent: CallbackAction<VoidCallbackIntent>(
+              onInvoke: (intent) => intent.callback(),
+            ),
+          },
+          child: FocusScope(
+            autofocus: true,
+            child: editorWidget,
+          ),
+        ),
+      );
+    }
+    
+    return editorWidget;
+  }
+}

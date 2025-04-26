@@ -1,0 +1,50 @@
+name: docu
+description: "Marco Allegretti Text Editor"
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  open_file: ^3.0.0
+  collection: ^1.0.0
+  file_saver: 0.2.14
+  path: ^1.0.0
+  file_picker: ^10.0.0
+  printing: ^5.12.0
+  pdf: ^3.10.8
+  flex_color_picker: ^3.3.0
+  font_awesome_flutter: ^10.0.0
+  device_info_plus: ^11.3.3
+  flutter_platform_widgets: ^8.0.0
+  intl: ^0.19.0
+  flutter_keyboard_visibility: ^6.0.0
+  flutter_quill: ^11.2.0
+  quill_delta: ^3.0.0-nullsafety.2
+  data_table_2: ^2.5.10
+  flutter:
+    sdk: flutter
+  pasteboard: ^0.4.0
+  cupertino_icons: ^1.0.0
+  fl_chart: ^0.71.0
+  google_fonts: ^6.1.0
+  shared_preferences: ^2.5.3
+  path_provider: ^2.1.5
+  provider: ^6.1.4
+  http: '>=1.0.0'
+  uuid: '>=3.0.0'
+  mime: ^2.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/NotoSans-Regular.ttf
+  fonts:
+    - family: NotoSans
+      fonts:
+        - asset: assets/NotoSans-Regular.ttf
